@@ -13,6 +13,7 @@ local function harness()
         vehicles = { [1] = 0, [2] = 0 },
         health = { [1] = 100, [2] = 0 },
         online = { [1] = true, [2] = true },
+        occupiedSeats = {}, targetSeat = 0,
     }
     local env = setmetatable({}, { __index = _G })
     h.env = env
@@ -34,6 +35,9 @@ local function harness()
     env.GetPlayerRoutingBucket = function(id) return h.buckets[id] end
     env.GetEntityRoutingBucket = function(id) return h.vehicleBuckets[id] end
     env.GetVehiclePedIsIn = function(ped) return h.vehicles[ped] or 0 end
+    env.GetPedInVehicleSeat = function(vehicle, seat)
+        return h.occupiedSeats[seat] or (h.vehicles[2] == vehicle and h.targetSeat == seat and 2 or 0)
+    end
     env.NetworkGetEntityFromNetworkId = function(id) return id == 100 and 100 or 0 end
     env.DoesEntityExist = function(id) return id == 100 end
     env.GetEntityType = function() return 2 end
@@ -123,9 +127,9 @@ do
     assert(not h:find('carry_people:client:removeFromVehicle'), 'disabled removal passed')
     h.vehicles[2] = 0
     h.env.Config.Vehicle.enabled = true
-    h:trigger('carry_people:server:putInVehicle', 1, 100, 16)
+    h:trigger('carry_people:server:putInVehicle', 1, 100, 2)
     local item = assert(h:find('carry_people:client:putInVehicle', 2))
-    assert(item.args[3] == nil, 'caller supplied seat was forwarded')
+    assert(item.args[3] == 2, 'selected seat was not forwarded')
 end
 
 do
@@ -195,4 +199,75 @@ do
     assert(h:find('carry_people:client:startCarrier', 1), 'request cooldown did not expire')
 end
 
-print('server_spec: 10 scenarios passed')
+do
+    local h = harness()
+    h:start()
+    for _, seat in ipairs({ -2, -1, 1.5, 16, '0', false }) do
+        h:trigger('carry_people:server:putInVehicle', 1, 100, seat)
+        assert(not h:find('carry_people:client:putInVehicle'), 'invalid server seat passed')
+    end
+    h:trigger('carry_people:server:putInVehicle', 1, 100)
+    assert(not h:find('carry_people:client:putInVehicle'), 'missing server seat passed')
+    h.env.Config.Vehicle.allowDriverSeat = true
+    h:trigger('carry_people:server:putInVehicle', 1, 100, -1)
+    assert(h:find('carry_people:client:putInVehicle').args[3] == -1, 'enabled driver request was not forwarded')
+end
+
+do
+    local h = harness()
+    h:start()
+    h.occupiedSeats[0] = 99
+    h:trigger('carry_people:server:putInVehicle', 1, 100, 0)
+    assert(not h:find('carry_people:client:putInVehicle'), 'server forwarded occupied seat')
+    assert(h:find('carry_people:client:putInVehicleFailed', 1), 'occupied seat had no failure feedback')
+    h:advance(500)
+    h:trigger('carry_people:server:putInVehicle', 1, 100, 2)
+    assert(h:find('carry_people:client:putInVehicle').args[3] == 2, 'occupied seat failure did not preserve carry')
+end
+
+do
+    local h = harness()
+    h.env.Config.VehiclePlacementTimeout = 1750
+    local sessionId = h:start()
+    h:trigger('carry_people:server:putInVehicle', 1, 100, 2)
+    h.vehicles[2] = 100
+    h.targetSeat = 0
+    h:trigger('carry_people:server:putInVehicleResult', 2, sessionId, true)
+    for _ = 1, 5 do h:advance(250) end
+    assert(not h:find('carry_people:client:putInVehicleDone'), 'server confirmed the wrong seat')
+    assert(not h:find('carry_people:client:putInVehicleFailed', 1), 'seat verification ended before the placement timeout')
+    for _ = 1, 2 do h:advance(250) end
+    assert(h:find('carry_people:client:putInVehicleFailed', 1), 'seat mismatch had no feedback')
+    assert(h:find('carry_people:client:stop', 2), 'seat mismatch did not clear the pair at timeout')
+end
+
+do
+    local h = harness()
+    local sessionId = h:start()
+    h:trigger('carry_people:server:putInVehicle', 1, 100, 2)
+    h.vehicles[2] = 100
+    h.targetSeat = 0
+    h:trigger('carry_people:server:putInVehicleResult', 2, sessionId, true)
+    assert(not h:find('carry_people:client:putInVehicleDone'), 'server skipped seat replication check')
+    h.targetSeat = 2
+    h:advance(250)
+    assert(h:find('carry_people:client:putInVehicleDone', 1), 'delayed selected seat replication was not confirmed')
+end
+
+do
+    local h = harness()
+    local sessionId = h:start()
+    h:trigger('carry_people:server:putInVehicle', 1, 100, 2)
+    h.vehicles[2] = 100
+    h.targetSeat = 0
+    h:trigger('carry_people:server:putInVehicleResult', 2, sessionId, true)
+    for _ = 1, 5 do h:advance(250) end
+    assert(not h:find('carry_people:client:putInVehicleFailed', 1), 'verification failed after only one second')
+    h.targetSeat = 2
+    h:advance(250)
+    assert(h:find('carry_people:client:putInVehicleDone', 1), 'seat replication after one second was rejected')
+    h:advance(h.env.Config.VehiclePlacementTimeout)
+    assert(not h:find('carry_people:client:putInVehicleFailed', 1), 'placement timeout fired after success')
+end
+
+print('server_spec: 15 scenarios passed')

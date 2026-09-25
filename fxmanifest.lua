@@ -3,7 +3,7 @@ game "gta5"
 
 author "kongcheng"
 description "Standalone carry player script"
-version "1.2.1"
+version "1.3.0"
 dependency "ox_lib"
 
 shared_scripts {

@@ -24,7 +24,8 @@ ensure carry_people
 
 靠近玩家输入一次背起，再输入一次放下。
 背人或被背时，按 `X` 也可以放下/下来。
-背着玩家靠近车辆时，可以输入 `/putincar` 把人放进车里；实际执行时会重新选择空座位。
+背着玩家靠近车辆时，输入 `/putincar` 或使用车辆目标交互「把背着的人放进车里」，会打开座位选择菜单。点击副驾驶、后排左座或后排右座等可用座位，把人放到所选位置。
+菜单按车型显示座位，已占用的座位不可选；按 Esc 取消菜单会继续背人。若选定座位在执行前被占用，操作会失败并保留背人状态，可以重新打开菜单选择，不会自动换座。
 靠近有死亡玩家的车辆，可以输入 `/pulloutdead` 把死亡玩家从车上放下。
 
 默认会在 `ox_lib` 径向菜单里显示 `背人`。
@@ -45,6 +46,9 @@ ensure carry_people
 - `Config.EnableStopKey`: 是否启用放下按键；关闭后按键映射和可选原生控制均停用
 - `Config.StopControl`: 可选的原生控制编号，默认关闭；通常只需使用可重映射的 `StopKey`
 - `Config.Vehicle`: 放进车里的命令、距离和座位配置
+- `Config.Vehicle.seatOrder`: 座位菜单显示顺序，默认后排左座、后排右座、副驾驶；其余乘客座位自动补充
+- `Config.Vehicle.allowDriverSeat`: 是否允许选择驾驶位，默认 `false`，改成 `true` 即可开启
+- `Config.Vehicle.seatLabels`: 座位名称，`-1` 为驾驶位、`0` 为副驾驶、`1/2` 为普通四座车的后排左/右座；特殊车型可自行调整
 - `Config.CarryStartTimeout` / `Config.VehiclePlacementTimeout`: 背人启动和放入车辆的超时毫秒数
 - `Config.MaxDistance`: 最大交互距离
 - `Config.Text`: 中文提示文字

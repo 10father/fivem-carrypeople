@@ -12,6 +12,7 @@ local lastStopRequest = -1000
 local activeMeTexts = {}
 local deadVehicleCache = {}
 local lastDeadVehicleSweep = 0
+local vehicleSeatMenuId = "carry_people_vehicle_seats"
 
 local function notify(message)
     if not message or message == "" then return end
@@ -111,6 +112,10 @@ local function stopCarryAnimations()
 end
 
 local function clearCarryState()
+    if lib and lib.getOpenContextMenu and lib.getOpenContextMenu() == vehicleSeatMenuId then
+        lib.hideContext(false)
+    end
+
     local hadCarry = isCarrying or isCarried
     local wasCarried = isCarried
     stateGeneration = stateGeneration + 1
@@ -295,7 +300,7 @@ local function buildSeatCandidates(vehicle)
 
     local function addSeat(seat)
         seat = tonumber(seat)
-        if not seat or used[seat] then return end
+        if not seat or seat ~= math.floor(seat) or seat < -1 or seat > 15 or used[seat] then return end
 
         if seat == -1 then
             if allowDriverSeat then
@@ -324,16 +329,12 @@ local function buildSeatCandidates(vehicle)
     return seats
 end
 
-local function getFreePassengerSeat(vehicle)
-    if not vehicle or vehicle == 0 or not DoesEntityExist(vehicle) then return nil end
-
-    for _, seat in ipairs(buildSeatCandidates(vehicle)) do
-        if IsVehicleSeatFree(vehicle, seat) then
-            return seat
-        end
+local function isVehicleSeatAllowed(vehicle, seat)
+    if type(seat) ~= "number" or seat ~= math.floor(seat) or seat < -1 or seat > 15 then
+        return false
     end
-
-    return nil
+    if seat == -1 then return Config.Vehicle and Config.Vehicle.allowDriverSeat == true end
+    return seat < GetVehicleMaxNumberOfPassengers(vehicle)
 end
 
 local function getVehicleNetId(vehicle)
@@ -347,6 +348,31 @@ local function getVehicleNetId(vehicle)
     end
 
     return netId
+end
+
+local function submitVehicleSeat(vehicle, netId, seat, sessionId)
+    if Config.Vehicle and Config.Vehicle.enabled == false then return end
+    if not isCarrying or currentSessionId ~= sessionId then
+        notify(Config.Text.notCarrying)
+        return
+    end
+
+    local maxDistance = (Config.Vehicle and Config.Vehicle.distance) or Config.MaxDistance
+    if not DoesEntityExist(vehicle) or VehToNet(vehicle) ~= netId
+        or #(GetEntityCoords(PlayerPedId()) - GetEntityCoords(vehicle)) > maxDistance then
+        notify(Config.Text.noVehicle)
+        return
+    end
+    if IsPedInAnyVehicle(PlayerPedId(), false) then
+        notify(Config.Text.inVehicle)
+        return
+    end
+    if not isVehicleSeatAllowed(vehicle, seat) or not IsVehicleSeatFree(vehicle, seat, true) then
+        notify(Config.Text.vehicleSeatUnavailable)
+        return
+    end
+
+    TriggerServerEvent("carry_people:server:putInVehicle", netId, seat)
 end
 
 local function requestPutInVehicle(vehicle)
@@ -373,19 +399,42 @@ local function requestPutInVehicle(vehicle)
         return
     end
 
-    local seat = getFreePassengerSeat(vehicle)
-    if seat == nil then
-        notify(Config.Text.vehicleFull)
-        return
-    end
-
     local netId = getVehicleNetId(vehicle)
     if not netId or netId == 0 then
         notify(Config.Text.noVehicle)
         return
     end
 
-    TriggerServerEvent("carry_people:server:putInVehicle", netId)
+    local sessionId = currentSessionId
+    local options = {}
+    local hasFreeSeat = false
+    local labels = (Config.Vehicle and Config.Vehicle.seatLabels) or {}
+    for _, seat in ipairs(buildSeatCandidates(vehicle)) do
+        local available = IsVehicleSeatFree(vehicle, seat, true)
+        if available then hasFreeSeat = true end
+        options[#options + 1] = {
+            title = labels[seat] or (Config.Text.vehicleSeatLabel):format(seat + 1),
+            description = available and Config.Text.vehicleSeatAvailable or Config.Text.vehicleSeatOccupied,
+            icon = "chair",
+            disabled = not available,
+            onSelect = function()
+                submitVehicleSeat(vehicle, netId, seat, sessionId)
+            end,
+        }
+    end
+
+    if not hasFreeSeat then
+        notify(Config.Text.vehicleFull)
+        return
+    end
+
+    lib.registerContext({
+        id = vehicleSeatMenuId,
+        title = Config.Text.vehicleSeatMenu,
+        canClose = true,
+        options = options,
+    })
+    lib.showContext(vehicleSeatMenuId)
 end
 
 local function findDeadPlayerInVehicle(vehicle)
@@ -826,7 +875,7 @@ RegisterNetEvent("carry_people:client:putInVehicleSuccess", function(sessionId)
     notify(Config.Text.putInVehicleTarget)
 end)
 
-RegisterNetEvent("carry_people:client:putInVehicle", function(sessionId, vehicleNetId)
+RegisterNetEvent("carry_people:client:putInVehicle", function(sessionId, vehicleNetId, seatNumber)
     if currentSessionId ~= sessionId or not isCarried then return end
 
     local timeout = GetGameTimer() + 3000
@@ -844,13 +893,8 @@ RegisterNetEvent("carry_people:client:putInVehicle", function(sessionId, vehicle
         return
     end
 
-    local seatNumber = getFreePassengerSeat(vehicle)
-    local maxPassengers = GetVehicleMaxNumberOfPassengers(vehicle)
-    if seatNumber == nil or seatNumber ~= math.floor(seatNumber)
-        or seatNumber < -1 or seatNumber > 15
-        or (seatNumber == -1 and Config.Vehicle.allowDriverSeat ~= true)
-        or (seatNumber >= 0 and seatNumber >= maxPassengers)
-        or not IsVehicleSeatFree(vehicle, seatNumber)
+    if not isVehicleSeatAllowed(vehicle, seatNumber)
+        or not IsVehicleSeatFree(vehicle, seatNumber, true)
         or GetVehiclePedIsIn(PlayerPedId(), false) ~= 0 then
         TriggerServerEvent("carry_people:server:putInVehicleResult", sessionId, false)
         return
